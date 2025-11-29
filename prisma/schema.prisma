@@ -1,0 +1,390 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  image         String?
+  role          UserRole  @default(USER)
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+  forms         Form[]
+  workspaces    WorkspaceMember[]
+  submissions   Submission[]
+  apiKeys       ApiKey[]
+}
+
+enum UserRole {
+  USER
+  ADMIN
+  SUPER_ADMIN
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Workspace {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  description String?
+  logo        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members     WorkspaceMember[]
+  forms       Form[]
+  settings    WorkspaceSettings?
+}
+
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+  userId      String
+  workspaceId String
+  role        WorkspaceRole @default(MEMBER)
+  joinedAt    DateTime      @default(now())
+
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+model WorkspaceSettings {
+  id                    String    @id @default(cuid())
+  workspaceId           String    @unique
+  googleSheetTemplateId String?
+  defaultAiModel        String    @default("gemini-2.0-flash")
+  maxSubmissionsPerForm Int       @default(10000)
+  aiEvaluationEnabled   Boolean   @default(true)
+  customBranding        Json?
+
+  workspace             Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model Form {
+  id                String      @id @default(cuid())
+  title             String
+  description       String?     @db.Text
+  slug              String
+  status            FormStatus  @default(DRAFT)
+  type              FormType    @default(SURVEY)
+  userId            String
+  workspaceId       String?
+
+  // Form Configuration
+  schema            Json        // Form fields and structure
+  settings          Json        // Form-level settings
+  styling           Json?       // Custom styling options
+
+  // AI Configuration
+  aiConfig          Json?       // AI evaluation settings
+  evaluationPrompt  String?     @db.Text
+  gradingRubric     Json?       // For test/quiz forms
+
+  // Google Sheets Integration
+  googleSheetId     String?
+  sheetSyncEnabled  Boolean     @default(false)
+  sheetMapping      Json?       // Field to column mapping
+  lastSyncAt        DateTime?
+
+  // Scheduling & Limits
+  opensAt           DateTime?
+  closesAt          DateTime?
+  maxSubmissions    Int?
+  submissionLimit   SubmissionLimitType?
+
+  // Analytics
+  viewCount         Int         @default(0)
+  submissionCount   Int         @default(0)
+
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  publishedAt       DateTime?
+
+  user              User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace         Workspace?  @relation(fields: [workspaceId], references: [id])
+  submissions       Submission[]
+  questions         Question[]
+  analytics         FormAnalytics?
+  webhooks          Webhook[]
+
+  @@unique([workspaceId, slug])
+  @@index([userId])
+  @@index([status])
+}
+
+enum FormStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+  ARCHIVED
+}
+
+enum FormType {
+  SURVEY
+  QUIZ
+  TEST
+  ASSESSMENT
+  FEEDBACK
+  REGISTRATION
+  APPLICATION
+  POLL
+  CUSTOM
+}
+
+enum SubmissionLimitType {
+  NONE
+  ONE_PER_USER
+  ONE_PER_EMAIL
+  ONE_PER_IP
+  CUSTOM
+}
+
+model Question {
+  id              String        @id @default(cuid())
+  formId          String
+  order           Int
+  type            QuestionType
+  label           String        @db.Text
+  description     String?       @db.Text
+  placeholder     String?
+  required        Boolean       @default(false)
+
+  // Question Configuration
+  config          Json          // Type-specific settings
+  validation      Json?         // Validation rules
+  conditionalLogic Json?        // Show/hide logic
+
+  // AI Evaluation Settings (for this specific question)
+  aiEvaluationEnabled Boolean   @default(false)
+  evaluationCriteria  String?   @db.Text
+  maxScore            Float?
+  rubric              Json?
+
+  // Correct Answer (for quizzes/tests)
+  correctAnswer   Json?
+  answerExplanation String?     @db.Text
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  form            Form          @relation(fields: [formId], references: [id], onDelete: Cascade)
+  answers         Answer[]
+
+  @@index([formId])
+}
+
+enum QuestionType {
+  SHORT_TEXT
+  LONG_TEXT
+  EMAIL
+  PHONE
+  NUMBER
+  URL
+  DATE
+  TIME
+  DATETIME
+  SINGLE_CHOICE
+  MULTIPLE_CHOICE
+  DROPDOWN
+  RATING
+  SCALE
+  MATRIX
+  FILE_UPLOAD
+  SIGNATURE
+  SECTION_BREAK
+  PAGE_BREAK
+  STATEMENT
+  RANKING
+  CODE_EDITOR
+  ESSAY
+}
+
+model Submission {
+  id              String            @id @default(cuid())
+  formId          String
+  userId          String?           // Optional for anonymous submissions
+
+  // Submission Data
+  status          SubmissionStatus  @default(PENDING)
+  data            Json              // Raw submission data
+  metadata        Json?             // IP, user agent, etc.
+
+  // AI Evaluation Results
+  aiEvaluated     Boolean           @default(false)
+  aiScore         Float?
+  aiGrade         String?
+  aiFeedback      String?           @db.Text
+  aiAnalysis      Json?             // Detailed AI analysis
+  evaluatedAt     DateTime?
+
+  // Manual Review
+  manualScore     Float?
+  manualGrade     String?
+  manualFeedback  String?           @db.Text
+  reviewedBy      String?
+  reviewedAt      DateTime?
+
+  // Final Results
+  finalScore      Float?
+  finalGrade      String?
+  passed          Boolean?
+
+  // Timestamps
+  startedAt       DateTime?
+  submittedAt     DateTime          @default(now())
+  completionTime  Int?              // In seconds
+
+  // Google Sheets Sync
+  sheetRowNumber  Int?
+  syncedToSheet   Boolean           @default(false)
+  lastSheetSync   DateTime?
+
+  form            Form              @relation(fields: [formId], references: [id], onDelete: Cascade)
+  user            User?             @relation(fields: [userId], references: [id])
+  answers         Answer[]
+
+  @@index([formId])
+  @@index([userId])
+  @@index([status])
+}
+
+enum SubmissionStatus {
+  PENDING
+  SUBMITTED
+  EVALUATING
+  EVALUATED
+  REVIEWED
+  FLAGGED
+}
+
+model Answer {
+  id            String      @id @default(cuid())
+  submissionId  String
+  questionId    String
+
+  // Answer Data
+  value         Json        // The actual answer
+
+  // AI Evaluation for this answer
+  aiScore       Float?
+  aiMaxScore    Float?
+  aiFeedback    String?     @db.Text
+  aiConfidence  Float?      // AI confidence in evaluation
+
+  // Manual Grading
+  manualScore   Float?
+  manualFeedback String?    @db.Text
+
+  createdAt     DateTime    @default(now())
+
+  submission    Submission  @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  question      Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([submissionId, questionId])
+}
+
+model FormAnalytics {
+  id                  String   @id @default(cuid())
+  formId              String   @unique
+
+  // Aggregate Statistics
+  totalViews          Int      @default(0)
+  uniqueViews         Int      @default(0)
+  totalSubmissions    Int      @default(0)
+  completionRate      Float    @default(0)
+  averageTime         Int?     // In seconds
+  bounceRate          Float    @default(0)
+
+  // AI-Generated Insights
+  aiInsights          Json?
+  sentimentAnalysis   Json?
+  trendAnalysis       Json?
+  lastAnalyzedAt      DateTime?
+
+  // Score Distribution (for tests/quizzes)
+  scoreDistribution   Json?
+  averageScore        Float?
+  passRate            Float?
+
+  updatedAt           DateTime @updatedAt
+
+  form                Form     @relation(fields: [formId], references: [id], onDelete: Cascade)
+}
+
+model Webhook {
+  id          String        @id @default(cuid())
+  formId      String
+  url         String
+  events      String[]      // submission.created, evaluation.completed, etc.
+  secret      String
+  active      Boolean       @default(true)
+
+  // Delivery tracking
+  lastTriggered DateTime?
+  failureCount  Int         @default(0)
+
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  form        Form          @relation(fields: [formId], references: [id], onDelete: Cascade)
+}
+
+model ApiKey {
+  id          String    @id @default(cuid())
+  userId      String
+  name        String
+  key         String    @unique
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  permissions String[]
+
+  createdAt   DateTime  @default(now())
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
