@@ -62,8 +62,27 @@ export async function POST(req: NextRequest) {
       data: { submissionCount: { increment: 1 } },
     })
 
-    // TODO: Queue for AI evaluation and Google Sheets sync
-    // This will be handled by the background job processor
+    // Queue for AI evaluation if enabled
+    if (form.aiConfig && (form.aiConfig as any).enabled) {
+      try {
+        const { queueEvaluation } = await import('@/lib/queue/submission-queue')
+        await queueEvaluation(submission.id, form.id)
+      } catch (error) {
+        console.error('Failed to queue evaluation:', error)
+        // Don't fail the submission if queuing fails
+      }
+    }
+
+    // Queue for Google Sheets sync if enabled
+    if (form.sheetSyncEnabled && form.googleSheetId) {
+      try {
+        const { queueSheetSync } = await import('@/lib/queue/submission-queue')
+        await queueSheetSync(submission.id, form.googleSheetId)
+      } catch (error) {
+        console.error('Failed to queue sheet sync:', error)
+        // Don't fail the submission if queuing fails
+      }
+    }
 
     return NextResponse.json(submission, { status: 201 })
   } catch (error) {
